@@ -22,12 +22,11 @@
 19) Регулювання різкості
 20) Додавання тексту
 """
-
+import io
 import os
-import time
 from tkinter import *
 from tkinter import filedialog as fd, ttk, colorchooser
-from PIL import ImageGrab, ImageTk, Image, ImageEnhance
+from PIL import Image, ImageTk, ImageEnhance
 import PIL.ImageOps
 
 # -------------------- Ініціалізація --------------------
@@ -36,7 +35,7 @@ import PIL.ImageOps
 root = Tk()
 root.title('Графічний редактор')
 root.state('zoomed')
-root.iconphoto(False, PhotoImage(file='./icon.png'))
+# root.iconphoto(False, PhotoImage(file='./icon.png'))
 
 # Глобальні зміні та константи
 brush_size = 10
@@ -58,9 +57,11 @@ cv_x = 75
 cv_y = 10
 cv_w = 1420
 cv_h = 740
-canvas = Canvas(root, width=cv_w, height=cv_h,  # Розмір області в програмі
-                bg='white', scrollregion=(0, 0, 1920, 1080),  # Загальний розмір
-                xscrollcommand=h.set, yscrollcommand=v.set)  # Прив'язування скролбарів
+scroll_w = 1420
+scroll_h = 740
+canvas = Canvas(root, width=cv_w, height=cv_h,                        # Розмір області в програмі
+                bg='white', scrollregion=(0, 0, scroll_w, scroll_h),  # Загальний розмір
+                xscrollcommand=h.set, yscrollcommand=v.set)           # Прив'язування скролбарів
 h.configure(command=canvas.xview)
 v.configure(command=canvas.yview)
 
@@ -148,8 +149,19 @@ def color_change(color):
 
 # Приближення/віддалення
 def do_zoom(event):
+    global scroll_w, scroll_h, img
     factor = 1.001 ** event.delta
-    canvas.scale(ALL, event.x, event.y, factor, factor)
+
+    if scroll_w > cv_w and scroll_h > cv_h:
+        canvas.scale('all', event.x, event.y, factor, factor)
+    if factor > 1:
+        scroll_w += 5
+        scroll_h += 5
+    elif factor < 1 and (scroll_w > cv_w and scroll_h > cv_h):
+        scroll_w -= 5
+        scroll_h -= 5
+
+    canvas.configure(scrollregion=(0, 0, scroll_w, scroll_h))
 
 
 # Створення нової кнопки для зміни кольору
@@ -186,10 +198,10 @@ def coordinates(event):
 
 # Отримання зображення з полотна
 def get_image() -> Image:
-    time.sleep(0.5)
-    x, y = root.winfo_rootx() + cv_x + 23, root.winfo_rooty() + cv_y + 16
-    x1, y1 = x + int(cv_w * 1.25), y + int(cv_h * 1.25)
-    return ImageGrab.grab().crop((x, y, x1, y1))
+    ps = canvas.postscript()
+    new_img = Image.open(io.BytesIO(ps.encode('utf-8')))
+    new_img = new_img.resize((cv_w, cv_h), Image.ANTIALIAS)
+    return new_img
 
 
 # Збереження зображення
@@ -209,7 +221,7 @@ def paste_image():
 
 # Вікно збільшення/зменшення зображення
 def change_scale():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('560x80+460+300')
@@ -238,7 +250,7 @@ def scale(new_size: float, new_img: Image):
 
 # Вікно зміни розміру зображення
 def change_size():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('400x80+460+300')
@@ -269,7 +281,7 @@ def size(width: int, height: int, new_img: Image):
 
 # Вікно обрізання зображення
 def crop_image():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('400x110+460+300')
@@ -316,9 +328,9 @@ def crop(x1: int, y1: int, x2: int, y2: int, new_img=Image):
 # Інвертоване зображення
 def invert():
     global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
     new_img = PIL.ImageOps.invert(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
@@ -326,9 +338,9 @@ def invert():
 # Чорно-біле зображення
 def grayscale():
     global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
     new_img = PIL.ImageOps.grayscale(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
@@ -336,9 +348,9 @@ def grayscale():
 # Віддзеркалення вертикально
 def flip():
     global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
     new_img = PIL.ImageOps.flip(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
@@ -348,7 +360,7 @@ def mirror():
     global img
     new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
     new_img = PIL.ImageOps.mirror(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
@@ -356,9 +368,9 @@ def mirror():
 # Погіршення якості
 def lower():
     global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
     new_img.save('./temp.jpg', quality=50)
-    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
     os.remove('./temp.jpg')
@@ -367,9 +379,9 @@ def lower():
 # Ще більше огіршення якості
 def jpeg():
     global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
     new_img.save('./temp.jpg', quality=1)
-    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
     os.remove('./temp.jpg')
@@ -377,7 +389,7 @@ def jpeg():
 
 # Вікно змінення яскравості
 def brightness():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('360x90+460+300')
@@ -398,14 +410,14 @@ def change_brightness(value: int, new_img: Image):
     enhancer = ImageEnhance.Brightness(new_img)
     new_img = enhancer.enhance(value)
 
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
 
 # Вікно змінення контрастності
 def contrast():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('360x90+460+300')
@@ -426,14 +438,14 @@ def change_contrast(value: int, new_img: Image):
     enhancer = ImageEnhance.Brightness(new_img)
     new_img = enhancer.enhance(value)
 
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
 
 # Вікно змінення різкості
 def sharpness():
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
+    new_img = get_image()
 
     sw = Tk()
     sw.geometry('360x90+460+300')
@@ -454,7 +466,7 @@ def change_sharpness(value: int, new_img: Image):
     enhancer = ImageEnhance.Sharpness(new_img)
     new_img = enhancer.enhance(value)
 
-    img = ImageTk.PhotoImage(new_img.resize((cv_w + 3, cv_h + 3), Image.ANTIALIAS))
+    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
     canvas.delete('all')
     canvas.create_image(0, 0, anchor=NW, image=img)
 
