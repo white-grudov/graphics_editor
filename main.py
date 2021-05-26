@@ -1,135 +1,765 @@
-"""
-Функції:
-1) Меню
-2) Вставка зображення
-3) Збереження зображення
-4) Скролл
-5) Збільшення/зменшення
-
-6) Вибір кольору
-7) Вибір пензля
-8) Зміна товщини пензля
-9) Очищення полотна
-10) Зміна розміру зображення в n разів
-11) Зміна розміру зоображення в пікселях
-12) Обрізання зображення
-13) Інвертування зображення
-14) Зробити чорно-білим
-15) Віддзеркалення зображення
-16) Погіршити якість зображення
-17) Регулювання яскравості
-18) Регулювання контрастності
-19) Регулювання різкості
-20) Додавання тексту
-"""
-import io
-import os
 from tkinter import *
-from tkinter import filedialog as fd, ttk, colorchooser
-from PIL import Image, ImageTk, ImageEnhance
+from tkinter import filedialog as fd, colorchooser, messagebox
+from PIL import Image, ImageTk, ImageEnhance, ImageDraw, ImageFont, ImageFilter
 import PIL.ImageOps
+from copy import copy
+import colorsys
 
-# -------------------- Ініціалізація --------------------
-
-# Налаштування вікна програми
 root = Tk()
 root.title('Графічний редактор')
-root.state('zoomed')
-# root.iconphoto(False, PhotoImage(file='./icon.png'))
+root.geometry('1280x720')
+root.resizable(width=False, height=False)
+root.bind('<Control-q>', lambda event: root.destroy())
 
-# Глобальні зміні та константи
-brush_size = 10
-brush_color = "black"
-img = None
+filename = None
+pil_image = Image.new('RGB', (0, 0), color='white')
+start_image = None
+prev_image = None
+image = None
+region = None
+scale = 100
+
+x_coord, y_coord = 0, 0
+
+default_width, default_height = 1105, 670
+canvas_width, canvas_height = 1105, 670
+d_top_margin, d_left_margin = 5, 150
+top_margin, left_margin = 5, 150
+
+start_crop_x, start_crop_y = 0, 0
+temp_crop_x, temp_crop_y = 0, 0
+end_crop_x, end_crop_y = 0, 0
+crop_rect = None
+
+do_blur = False
+do_brightness = False
+do_contrast = False
+do_sharpness = False
+do_histogram = False
+
+do_draw = False
 last_x, last_y = 0, 0
-text_x, text_y = None, None
-current_brush = 'ENHANCED'
+prev, start = None, None
+tools, colors = None, None
+enh_btn, line_btn, sqr_btn, crl_btn, sml_btn, color_ind, pipette = \
+    Button(), Button(), Button(), Button(), Button(), Button(), Button()
+brush_size = 5
+brush_color = 'black'
+brush_type = 'ENHANCED'
 
 FILETYPES = (('All files', '*.*'),
              ('JPEG files', '*.jpg;*.jpeg'),
              ('PNG files', '*.png'),
              ('BMP files', '*.bmp'))
 
-# Налаштування області малювання та скролбарів
-h = ttk.Scrollbar(root, orient=HORIZONTAL)
-v = ttk.Scrollbar(root, orient=VERTICAL)
-cv_x = 75
-cv_y = 10
-cv_w = 1420
-cv_h = 740
-scroll_w = 1420
-scroll_h = 740
-canvas = Canvas(root, width=cv_w, height=cv_h,                        # Розмір області в програмі
-                bg='white', scrollregion=(0, 0, scroll_w, scroll_h),  # Загальний розмір
-                xscrollcommand=h.set, yscrollcommand=v.set)           # Прив'язування скролбарів
-h.configure(command=canvas.xview)
-v.configure(command=canvas.yview)
 
-canvas.place(x=cv_x, y=cv_y)
-h.pack(side=BOTTOM, fill=X)
-v.pack(side=RIGHT, fill=Y)
+def resize(_):
+    global region
+    region = canvas.bbox(ALL)
+    canvas.configure(scrollregion=region)
 
 
-# -------------------- Основні функції --------------------
+def key_pressed(event):
+    global prev_image, pil_image
+    if event.keysym == 'z':
+        temp = pil_image
+        pil_image = prev_image
+        prev_image = temp
+        load_image('')
+    elif event.keysym == 's':
+        save_image('')
+    elif event.keysym == 'o':
+        load_image('new')
 
-# Передавання останього значення положення миші на полотні
+
+def load_image(option: str):
+    global filename, image, start_image, prev_image, pil_image, top_margin, left_margin
+
+    if option == 'default':
+        prev_image = pil_image
+        pil_image = Image.new('RGB', (default_width, default_height), color='white')
+        start_image = pil_image
+    elif option == 'new':
+        try:
+            prev_image = pil_image
+            filename = fd.askopenfilename(filetypes=FILETYPES)
+            pil_image = Image.open(filename)
+            start_image = pil_image
+        except AttributeError:
+            pass
+    elif option == 'start':
+        prev_image = pil_image
+        pil_image = start_image
+    elif option == 'prev':
+        temp = pil_image
+        pil_image = prev_image
+        prev_image = temp
+    else:
+        pass
+
+    canvas.delete(ALL)
+
+    if scale != 100:
+        w, h = pil_image.size
+        scaled_image = pil_image.resize((int(w * scale / 100), int(h * scale / 100)), Image.ANTIALIAS)
+        image = ImageTk.PhotoImage(scaled_image)
+    else:
+        image = ImageTk.PhotoImage(pil_image)
+    canvas.create_image(0, 0, anchor=NW, image=image)
+
+    if image.width() < canvas_width:
+        canvas.configure(width=image.width())
+    else:
+        canvas.configure(width=canvas_width)
+    if image.height() < canvas_height:
+        canvas.configure(height=image.height())
+    else:
+        canvas.configure(height=canvas_height)
+
+    if image.width() < default_width:
+        left_margin = d_left_margin + int((default_width - image.width()) / 2)
+    else:
+        left_margin = d_left_margin
+    if image.height() < default_height:
+        top_margin = d_top_margin + int((default_height - image.height()) / 2)
+    else:
+        top_margin = d_top_margin
+
+    canvas.place(x=left_margin, y=top_margin)
+    canvas.configure(scrollregion=canvas.bbox("all"))
+
+
+def save_image(option: str):
+    global filename
+    if option == 'as' or filename is None:
+        filename = fd.asksaveasfilename(filetypes=FILETYPES)
+    if pil_image is not None:
+        try:
+            pil_image.save(filename)
+        except ValueError:
+            pass
+    messagebox.showinfo(title='Повідомлення', message='Зображення збережено!')
+
+
+def crop():
+    crop_btn.config(background='light gray')
+
+    canvas.bind('<ButtonPress-1>', lambda event: start_crop(event))
+    canvas.bind('<B1-Motion>', lambda event: draw_crop(event))
+    canvas.bind('<ButtonRelease-1>', lambda event: end_crop(event))
+    root.bind('<Escape>', lambda event: suspend_crop(event))
+
+
+def suspend_crop(_):
+    global crop_rect
+    canvas.delete(crop_rect)
+    crop_btn.config(background='SystemButtonFace')
+
+    canvas.unbind('<ButtonPress-1>')
+    canvas.unbind('<B1-Motion>')
+    canvas.unbind('<ButtonRelease-1>')
+    root.unbind('<Escape>')
+
+
+def start_crop(event):
+    global start_crop_x, start_crop_y
+    start_crop_x, start_crop_y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+
+
+def draw_crop(event):
+    global temp_crop_x, temp_crop_y, crop_rect
+    canvas.delete(crop_rect)
+    temp_crop_x, temp_crop_y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+    crop_rect = canvas.create_rectangle(start_crop_x, start_crop_y,
+                                        temp_crop_x, temp_crop_y,
+                                        fill='gray', stipple='gray12', width=0)
+
+
+def end_crop(event):
+    global end_crop_x, end_crop_y
+
+    end_crop_x, end_crop_y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+    root.bind('<Return>', lambda e: do_crop(e))
+
+
+def do_crop(_):
+    global pil_image, image, prev_image
+    prev_image = pil_image
+    pil_image = pil_image.crop((start_crop_x, start_crop_y,
+                                end_crop_x, end_crop_y))
+    canvas.delete(ALL)
+    load_image('')
+    crop_btn.config(background='SystemButtonFace')
+
+    canvas.unbind('<ButtonPress-1>')
+    canvas.unbind('<B1-Motion>')
+    canvas.unbind('<ButtonRelease-1>')
+    root.unbind('<Return>')
+
+
+def rotate():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = pil_image.transpose(Image.ROTATE_270)
+    load_image('')
+
+
+def mirror():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.mirror(pil_image)
+    load_image('')
+
+
+def flip():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.flip(pil_image)
+    load_image('')
+
+
+def invert():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.invert(pil_image)
+    load_image('')
+
+
+def grayscale():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.grayscale(pil_image)
+    load_image('')
+
+
+def posterize():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.posterize(pil_image, 3)
+    load_image('')
+
+
+def solarize():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = PIL.ImageOps.solarize(pil_image, 64)
+    load_image('')
+
+
+def washout():
+    global pil_image, prev_image
+    prev_image = pil_image
+    pil_image = pil_image.filter(ImageFilter.Color3DLUT.generate(17, do_washout))
+    load_image('')
+
+
+def do_washout(r, g, b):
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if 0.3 < h < 0.7:
+        s = 0
+    return colorsys.hsv_to_rgb(h, s, v)
+
+
+def blur():
+    global prev_image, pil_image, do_blur
+    do_blur = True
+
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Розмиття')
+    popup_slider = Scale(popup_win, from_=0, to=100, orient=HORIZONTAL, length=200)
+    popup_slider.pack()
+    ok_btn = Button(popup_win, text='OK', command=lambda: end_blur(popup_win))
+    ok_btn.pack(side=BOTTOM)
+    change_blur(popup_win, popup_slider, 0)
+    popup_slider.set(0)
+
+
+def change_blur(popup_win: Toplevel, popup_slider: Scale, def_value: int):
+    global prev_image, pil_image
+
+    if do_blur:
+        slider_value = def_value
+        try:
+            slider_value = popup_slider.get()
+        except TclError:
+            pass
+        pil_image = prev_image
+        pil_image = pil_image.filter(ImageFilter.GaussianBlur(slider_value))
+        load_image('')
+        canvas.after(200, lambda: change_blur(popup_win, popup_slider, slider_value))
+
+
+def end_blur(popup_win: Toplevel):
+    global do_blur
+    do_blur = False
+    popup_win.destroy()
+
+
+def brightness():
+    global prev_image, pil_image, do_brightness
+    do_brightness = True
+
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Яскравість')
+    popup_slider = Scale(popup_win, from_=-100, to=100, orient=HORIZONTAL, length=200)
+    popup_slider.pack()
+    ok_btn = Button(popup_win, text='OK', command=lambda: end_brightness(popup_win))
+    ok_btn.pack(side=BOTTOM)
+    change_brightness(popup_win, popup_slider, 0)
+    popup_slider.set(0)
+
+
+def change_brightness(popup_win: Toplevel, popup_slider: Scale, def_value: int):
+    global prev_image, pil_image
+
+    if do_brightness:
+        slider_value = def_value
+        try:
+            slider_value = popup_slider.get()
+        except TclError:
+            pass
+        _scale = (slider_value + 100) / 100
+        pil_image = prev_image
+        enhancer = ImageEnhance.Brightness(pil_image)
+        pil_image = enhancer.enhance(_scale)
+        load_image('')
+        canvas.after(200, lambda: change_brightness(popup_win, popup_slider, slider_value))
+
+
+def end_brightness(popup_win: Toplevel):
+    global do_brightness
+    do_brightness = False
+    popup_win.destroy()
+
+
+def contrast():
+    global prev_image, pil_image, do_contrast
+    do_contrast = True
+
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Контрастність')
+    popup_slider = Scale(popup_win, from_=-100, to=100, orient=HORIZONTAL, length=200)
+    popup_slider.pack()
+    ok_btn = Button(popup_win, text='OK', command=lambda: end_contrast(popup_win))
+    ok_btn.pack(side=BOTTOM)
+    change_contrast(popup_win, popup_slider, 0)
+    popup_slider.set(0)
+
+
+def change_contrast(popup_win: Toplevel, popup_slider: Scale, def_value: int):
+    global prev_image, pil_image
+
+    if do_contrast:
+        slider_value = def_value
+        try:
+            slider_value = popup_slider.get()
+        except TclError:
+            pass
+        _scale = (slider_value + 100) / 100
+        pil_image = prev_image
+        enhancer = ImageEnhance.Contrast(pil_image)
+        pil_image = enhancer.enhance(_scale)
+        load_image('')
+        canvas.after(200, lambda: change_contrast(popup_win, popup_slider, slider_value))
+
+
+def end_contrast(popup_win: Toplevel):
+    global do_contrast
+    do_contrast = False
+    popup_win.destroy()
+
+
+def sharpness():
+    global prev_image, pil_image, do_sharpness
+    do_sharpness = True
+
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Різкість')
+    popup_slider = Scale(popup_win, from_=-100, to=100, orient=HORIZONTAL, length=200)
+    popup_slider.pack()
+    ok_btn = Button(popup_win, text='OK', command=lambda: end_sharpness(popup_win))
+    ok_btn.pack(side=BOTTOM)
+    change_sharpness(popup_win, popup_slider, 0)
+    popup_slider.set(0)
+
+
+def change_sharpness(popup_win: Toplevel, popup_slider: Scale, def_value: int):
+    global prev_image, pil_image
+
+    if do_sharpness:
+        slider_value = def_value
+        try:
+            slider_value = popup_slider.get()
+        except TclError:
+            pass
+        _scale = (slider_value + 100) / 100
+        pil_image = prev_image
+        enhancer = ImageEnhance.Sharpness(pil_image)
+        pil_image = enhancer.enhance(_scale)
+        load_image('')
+        canvas.after(200, lambda: change_sharpness(popup_win, popup_slider, slider_value))
+
+
+def end_sharpness(popup_win: Toplevel):
+    global do_sharpness
+    do_sharpness = False
+    popup_win.destroy()
+
+
+def close_default(temp: Image, popup_win: Toplevel):
+    global prev_image, pil_image, do_brightness, do_contrast, do_sharpness, do_histogram, do_blur
+    do_brightness, do_contrast, do_sharpness, do_histogram, do_blur = False, False, False, False, False
+    popup_win.destroy()
+    pil_image = prev_image
+    prev_image = temp
+    load_image('')
+
+
+def histogram():
+    global prev_image, pil_image, do_histogram
+    temp = prev_image
+    prev_image = pil_image
+    do_histogram = True
+
+    hist_win = Toplevel(root)
+    hist_win.title('Гістограма')
+    hist_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, hist_win))
+
+    hist_cv = Canvas(hist_win, width=350, height=400, bg='white')
+    hist_cv.pack()
+
+    red = Scale(hist_win, from_=-100, to=100,
+                orient=HORIZONTAL, label='Червоний', length=250)
+    green = Scale(hist_win, from_=-100, to=100,
+                  orient=HORIZONTAL, label='Зелений', length=250)
+    blue = Scale(hist_win, from_=-100, to=100,
+                 orient=HORIZONTAL, label='Синій', length=250)
+    red.pack()
+    green.pack()
+    blue.pack()
+    ok_btn = Button(hist_win, text='OK', command=lambda: end_histogram(hist_win))
+    ok_btn.pack()
+
+    RGB = (0, 0, 0)
+    red.configure(command=lambda e: change_colors(red, green, blue, hist_cv, RGB))
+    green.configure(command=lambda e: change_colors(red, green, blue, hist_cv, RGB))
+    blue.configure(command=lambda e: change_colors(red, green, blue, hist_cv, RGB))
+    change_colors(red, green, blue, hist_cv, RGB)
+
+
+def change_colors(red: Scale, green: Scale, blue: Scale, hist_cv: Canvas, RGB: tuple):
+    global prev_image, pil_image
+    if do_histogram:
+        pil_image = prev_image
+
+        R, G, B, T = None, None, None, None
+        try:
+            R, G, B = Image.Image.split(pil_image)
+        except ValueError:
+            R, G, B, T = Image.Image.split(pil_image)
+
+        r_var = red.get()
+        g_var = green.get()
+        b_var = blue.get()
+
+        (r_prev, g_prev, b_prev) = RGB
+        r_scale = (r_var - r_prev) / 100
+        g_scale = (g_var - g_prev) / 100
+        b_scale = (b_var - b_prev) / 100
+
+        R = R.point(lambda i: i + int(round(i * r_scale)))
+        G = G.point(lambda i: i + int(round(i * g_scale)))
+        B = B.point(lambda i: i + int(round(i * b_scale)))
+
+        try:
+            pil_image = Image.merge(pil_image.mode, (R, G, B))
+        except ValueError:
+            pil_image = Image.merge(pil_image.mode, (R, G, B, T))
+        load_image('')
+        show_histogram(hist_cv)
+
+
+def show_histogram(hist_cv: Canvas):
+    global pil_image
+    margin = 50
+    height = 400
+    hist_cv.delete(ALL)
+
+    hist_cv.create_line(margin - 1, height - margin + 1, margin - 1 + 258, height - margin + 1)
+    x_marker_start = margin - 1
+    for i in range(0, 257, 64):
+        x_marker = '%d' % i
+        hist_cv.create_text(x_marker_start + i, height - margin + 7, text=x_marker)
+
+    hist_cv.create_line(margin - 1, height - margin + 1, margin - 1, margin)
+    y_marker_start = height - margin + 1
+    for i in range(0, height - 2 * margin + 1, 50):
+        y_marker = '%d' % i
+        hist_cv.create_text(margin - 11, y_marker_start - i, text=y_marker)
+
+    R, G, B = pil_image.histogram()[:256], pil_image.histogram()[256:512], pil_image.histogram()[512:768]
+    for i in range(len(R)):
+        pixel_no = R[i]
+        hist_cv.create_oval(i + margin, height - pixel_no / 100 - 1 - margin,
+                            i + 2 + margin, height - pixel_no / 100 + 1 - margin,
+                            fill='red', outline='red')
+    for i in range(len(G)):
+        pixel_no = G[i]
+        hist_cv.create_oval(i + margin, height - pixel_no / 100 - 1 - margin,
+                            i + 2 + margin, height - pixel_no / 100 + 1 - margin,
+                            fill='green', outline='green')
+    for i in range(len(B)):
+        pixel_no = B[i]
+        hist_cv.create_oval(i + margin, height - pixel_no / 100 - 1 - margin,
+                            i + 2 + margin, height - pixel_no / 100 + 1 - margin,
+                            fill='blue', outline='blue')
+
+
+def end_histogram(hist_win: Toplevel):
+    global do_histogram
+    do_histogram = False
+    hist_win.destroy()
+
+
+def draw_(_):
+    global prev, start, prev_image, start_image, do_draw, scale
+    do_draw = not do_draw
+    brush_tools()
+
+    if do_draw:
+        scale = 100
+        load_image('')
+        scale_lbl.config(text=str(scale) + '%')
+        canvas.unbind('<MouseWheel>')
+
+        draw_btn.config(background='light gray')
+        prev = copy(pil_image)
+        start = copy(start_image)
+        prev_image = pil_image
+
+        canvas.bind('<Button-1>', xy)
+        canvas.bind('<B1-Motion>', do_draw_)
+        root.bind('<Return>', lambda event: draw_(event))
+    else:
+        prev_image = prev
+        start_image = start
+        draw_btn.config(background='SystemButtonFace')
+
+        canvas.delete(ALL)
+        load_image('')
+
+        canvas.unbind('<Button-1>')
+        canvas.unbind('<B1-Motion>')
+        canvas.bind('<MouseWheel>', zoom)
+        root.unbind('<Return>')
+
+
 def xy(event):
     global last_x, last_y
     last_x, last_y = canvas.canvasx(event.x), canvas.canvasy(event.y)
 
 
-# Малювання лінії
-def draw(event):
-    global brush_size, last_x, last_y
+def do_draw_(event):
+    global last_x, last_y, prev_image, pil_image, brush_color, brush_size
+    brush_size = int(brush_size)
+
+    if do_draw:
+        x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+
+        pil_image = prev_image
+        draw = ImageDraw.Draw(pil_image)
+
+        if brush_type == 'ENHANCED':
+            canvas.create_line((last_x, last_y, x, y),
+                               fill=brush_color,
+                               width=brush_size * 2)
+            canvas.create_oval(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
+                               fill=brush_color,
+                               outline=brush_color)
+            draw.line((last_x, last_y, x, y),
+                      fill=brush_color,
+                      width=brush_size * 2)
+            draw.ellipse((x - brush_size, y - brush_size, x + brush_size, y + brush_size),
+                         fill=brush_color,
+                         outline=brush_color)
+        elif brush_type == 'LINE':
+            canvas.create_line((last_x, last_y, x, y),
+                               fill=brush_color,
+                               width=brush_size * 2)
+            draw.line((last_x, last_y, x, y),
+                      fill=brush_color,
+                      width=brush_size * 2)
+        elif brush_type == 'SQUARE':
+            canvas.create_rectangle(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
+                                    fill=brush_color,
+                                    outline=brush_color)
+            draw.rectangle((x - brush_size, y - brush_size, x + brush_size, y + brush_size),
+                           fill=brush_color,
+                           outline=brush_color)
+        elif brush_type == 'CIRCLE':
+            canvas.create_oval(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
+                               fill=brush_color,
+                               outline=brush_color)
+            draw.ellipse((x - brush_size, y - brush_size, x + brush_size, y + brush_size),
+                         fill=brush_color,
+                         outline=brush_color)
+        elif brush_type == 'SMILE':
+            canvas.create_text(x, y, font='Arial ' + str(brush_size * 2), fill=brush_color, text='=)')
+            draw.text((x, y), font=ImageFont.truetype('arial.ttf', brush_size * 2), fill=brush_color, text='=)')
+
+        last_x, last_y = x, y
+
+
+def brush_tools():
+    global tools, colors, enh_btn, line_btn, sqr_btn, crl_btn, sml_btn, color_ind, pipette
+
+    if do_draw:
+        tools = LabelFrame(root, text='Малювання')
+        colors = Frame(tools)
+        sizes = Frame(tools)
+        slider = Frame(sizes)
+        brushes = Frame(slider)
+
+        black = color_button('#000000')
+        black.grid(row=0, column=0, padx=2, pady=2)
+        white = color_button('#FFFFFF')
+        white.grid(row=0, column=1, padx=2, pady=2)
+        azure4 = color_button('#838B8B')
+        azure4.grid(row=1, column=0, padx=2, pady=2)
+        gray = color_button('#808080')
+        gray.grid(row=1, column=1, padx=2, pady=2)
+        red4 = color_button('#8B0000')
+        red4.grid(row=2, column=0, padx=2, pady=2)
+        red = color_button('#FF0000')
+        red.grid(row=2, column=1, padx=2, pady=2)
+        orange = color_button('#FFA500')
+        orange.grid(row=3, column=0, padx=2, pady=2)
+        yellow = color_button('#FFFF00')
+        yellow.grid(row=3, column=1, padx=2, pady=2)
+        green = color_button('#008000')
+        green.grid(row=4, column=0, padx=2, pady=2)
+        l_green = color_button('#90EE90')
+        l_green.grid(row=4, column=1, padx=2, pady=2)
+        steelblue3 = color_button('#4F94CD')
+        steelblue3.grid(row=5, column=0, padx=2, pady=2)
+        l_blue = color_button('#ADD8E6')
+        l_blue.grid(row=5, column=1, padx=2, pady=2)
+        navy = color_button('#000080')
+        navy.grid(row=6, column=0, padx=2, pady=2)
+        blue = color_button('#0000FF')
+        blue.grid(row=6, column=1, padx=2, pady=2)
+        purple = color_button('#800080')
+        purple.grid(row=7, column=0, padx=2, pady=2)
+        pink = color_button('#FFC0CB')
+        pink.grid(row=7, column=1, padx=2, pady=2)
+        colors.grid(row=0, column=0)
+
+        choose = Button(sizes, text='Інший колір', relief='ridge', command=lambda: color_change(None))
+        choose.grid(row=0, column=0, padx=1, pady=1)
+        size = Scale(slider, from_=1, to=50, length=205, relief='flat', command=brush_slider)
+        size.set(brush_size)
+        size.grid(row=0, column=0, padx=1, pady=1)
+        sizes.grid(row=0, column=1)
+
+        enh_btn = Button(brushes, text='🖌', width=2, command=lambda: change_brush('ENHANCED'),
+                         relief='ridge', background='light gray')
+        line_btn = Button(brushes, text='/', width=2, relief='ridge', command=lambda: change_brush('LINE'))
+        sqr_btn = Button(brushes, text='■', width=2, relief='ridge', command=lambda: change_brush('SQUARE'))
+        crl_btn = Button(brushes, text='●', width=2, relief='ridge', command=lambda: change_brush('CIRCLE'))
+        sml_btn = Button(brushes, text='=)', width=2, relief='ridge', command=lambda: change_brush('SMILE'))
+        color_ind = Button(brushes, width=2, relief='ridge', bg=brush_color, state=DISABLED)
+        pipette = Button(brushes, text='💉', width=2, relief='ridge', bg='#D7E7E8', command=eyedropper)
+
+        pipette.grid(row=0, column=0, padx=1, pady=2)
+        enh_btn.grid(row=1, column=0, padx=1, pady=2)
+        line_btn.grid(row=2, column=0, padx=1, pady=2)
+        sqr_btn.grid(row=3, column=0, padx=1, pady=2)
+        crl_btn.grid(row=4, column=0, padx=1, pady=2)
+        sml_btn.grid(row=5, column=0, padx=1, pady=2)
+        color_ind.grid(row=6, column=0, padx=1, pady=2)
+        brushes.grid(row=0, column=1)
+        slider.grid(row=1, column=0)
+
+        tools.place(x=5, y=170)
+    else:
+        tools.destroy()
+
+
+def eyedropper():
+    pipette.config(bg='#B3D4D6')
+    canvas.bind('<Button-1>', lambda event: take_color(event))
+
+
+def take_color(event):
+    pipette.config(bg='#D7E7E8')
     x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
-
-    if current_brush == 'LINE':
-        canvas.create_line((last_x, last_y, x, y), fill=brush_color, width=brush_size * 2)
-    elif current_brush == 'SQUARE':
-        canvas.create_rectangle(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
-                                fill=brush_color, outline=brush_color)
-    elif current_brush == 'CIRCLE':
-        canvas.create_oval(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
-                           fill=brush_color, outline=brush_color)
-    elif current_brush == 'ENHANCED':
-        canvas.create_line((last_x, last_y, x, y), fill=brush_color, width=brush_size * 2)
-        canvas.create_oval(x - brush_size, y - brush_size, x + brush_size, y + brush_size,
-                           fill=brush_color, outline=brush_color)
-    elif current_brush == 'SMILE':
-        canvas.create_text(x - brush_size, y - brush_size,
-                           font='Arial ' + str(brush_size), fill=brush_color, text='=)')
-    last_x, last_y = x, y
+    canvas.unbind('<Button-1>')
+    canvas.bind('<Button-1>', xy)
+    r, g, b = pil_image.getpixel((x, y))
+    color_change('#%02x%02x%02x' % (r, g, b))
 
 
-# Зміна пензля
-def change_brush(new_brush: str):
-    global current_brush
-    current_brush = new_brush
-    if current_brush == 'LINE':
+def color_button(color: str):
+    btn = Button(colors, background=color, width=2, relief='ridge', command=lambda: color_change(color))
+    return btn
+
+
+def color_change(color: str or None):
+    global brush_color
+    if color is None:
+        (rgb, hx) = colorchooser.askcolor()
+        brush_color = hx
+    else:
+        brush_color = color
+    color_ind.config(bg=brush_color)
+
+
+def brush_slider(size: int):
+    global brush_size
+    brush_size = size
+
+
+def change_brush(new_type: str):
+    global brush_type
+    brush_type = new_type
+
+    if brush_type == 'LINE':
         line_btn.config(background='light gray')
         sqr_btn.config(background='SystemButtonFace')
         crl_btn.config(background='SystemButtonFace')
         enh_btn.config(background='SystemButtonFace')
         sml_btn.config(background='SystemButtonFace')
-    elif current_brush == 'SQUARE':
+    elif brush_type == 'SQUARE':
         line_btn.config(background='SystemButtonFace')
         sqr_btn.config(background='light gray')
         crl_btn.config(background='SystemButtonFace')
         enh_btn.config(background='SystemButtonFace')
         sml_btn.config(background='SystemButtonFace')
-    elif current_brush == 'CIRCLE':
+    elif brush_type == 'CIRCLE':
         line_btn.config(background='SystemButtonFace')
         sqr_btn.config(background='SystemButtonFace')
         crl_btn.config(background='light gray')
         enh_btn.config(background='SystemButtonFace')
         sml_btn.config(background='SystemButtonFace')
-    elif current_brush == 'ENHANCED':
+    elif brush_type == 'ENHANCED':
         line_btn.config(background='SystemButtonFace')
         sqr_btn.config(background='SystemButtonFace')
         crl_btn.config(background='SystemButtonFace')
         enh_btn.config(background='light gray')
         sml_btn.config(background='SystemButtonFace')
-    elif current_brush == 'SMILE':
+    elif brush_type == 'SMILE':
         line_btn.config(background='SystemButtonFace')
         sqr_btn.config(background='SystemButtonFace')
         crl_btn.config(background='SystemButtonFace')
@@ -137,476 +767,263 @@ def change_brush(new_brush: str):
         sml_btn.config(background='light gray')
 
 
-# Зміна кольору
-def color_change(color):
-    global brush_color
-    if color is None:
-        (rgb, hx) = colorchooser.askcolor()
-        brush_color = hx
-    else:
-        brush_color = color
-
-
-# Приближення/віддалення
-def do_zoom(event):
-    global scroll_w, scroll_h, img
-    factor = 1.001 ** event.delta
-
-    if scroll_w > cv_w and scroll_h > cv_h:
-        canvas.scale('all', event.x, event.y, factor, factor)
-    if factor > 1:
-        scroll_w += 5
-        scroll_h += 5
-    elif factor < 1 and (scroll_w > cv_w and scroll_h > cv_h):
-        scroll_w -= 5
-        scroll_h -= 5
-
-    canvas.configure(scrollregion=(0, 0, scroll_w, scroll_h))
-
-
-# Створення нової кнопки для зміни кольору
-def color_button(color: str, x: int, y: int):
-    btn = Button(background=color, width=2, command=lambda: color_change(color))
-    btn.place(x=x, y=y)
-
-
-# Обробка слайдеру зміни товщини пензля
-def brush_slider(new_size):
-    size_field.delete(0, END)
-    size_field.insert(0, new_size)
-    brush_size_change(int(new_size))
-
-
-# Обробка текстового поля для введення товщини
-def brush_textfield(_):
-    new_size = size_field.get()
-    size_slider.set(new_size)
-    brush_size_change(int(new_size))
-
-
-# Зміна товщини пензля
-def brush_size_change(new_size: int):
-    global brush_size
-    brush_size = new_size
-
-
-# Отримання поточних координат миші
-def coordinates(event):
-    x_crd.config(text=event.x)
-    y_crd.config(text=event.y)
-
-
-# Отримання зображення з полотна
-def get_image() -> Image:
-    ps = canvas.postscript()
-    new_img = Image.open(io.BytesIO(ps.encode('utf-8')))
-    new_img = new_img.resize((cv_w, cv_h), Image.ANTIALIAS)
-    return new_img
-
-
-# Збереження зображення
-def save_image():
-    new_img = get_image()
-    filename = fd.asksaveasfilename(filetypes=FILETYPES)
-    new_img.save(filename)
-
-
-# Вставка зображення
-def paste_image():
-    global img
-    filename = fd.askopenfilename(filetypes=FILETYPES)
-    img = ImageTk.PhotoImage(Image.open(filename))
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Вікно збільшення/зменшення зображення
-def change_scale():
-    new_img = get_image()
-
-    sw = Tk()
-    sw.geometry('560x80+460+300')
-    sw.wm_title('Збільшення/зменшення')
-
-    sw_lbl = Label(sw, text='Введіть, у скільки разів збільшити зображення:', justify='left', font=10)
-    sw_field = Entry(sw, width=40, font=10)
-    sw_btn = Button(sw, text='Змінити розмір', width=15,
-                    command=lambda: (scale(float(sw_field.get()), new_img), sw.destroy()))
-    sw_lbl.place(x=10, y=10)
-    sw_field.place(x=10, y=45)
-    sw_btn.place(x=400, y=43)
-
-
-# Збільшення/зменшення зображення
-def scale(new_size: float, new_img: Image):
-    global img
-    new_w = int(cv_w * new_size)
-    new_h = int(cv_h * new_size)
-
-    new_img = new_img.resize((new_w, new_h), Image.ANTIALIAS)
-    img = ImageTk.PhotoImage(new_img)
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Вікно зміни розміру зображення
 def change_size():
-    new_img = get_image()
+    global prev_image, pil_image
 
-    sw = Tk()
-    sw.geometry('400x80+460+300')
-    sw.wm_title('Розмір')
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Змінити розмір')
+    frame = Frame(popup_win)
 
-    sw_lbl = Label(sw, text='Введіть нові розміри зображення:', justify='left', font=10)
-    sw_width = Entry(sw, width=10, font=10)
-    sw_x = Label(sw, text='x', font=10)
-    sw_height = Entry(sw, width=10, font=10)
-    sw_btn = Button(sw, text='Змінити розмір', width=15,
-                    command=lambda: (size(int(sw_width.get()), int(sw_height.get()), new_img), sw.destroy()))
-    sw_lbl.place(x=10, y=10)
-    sw_width.place(x=10, y=45)
-    sw_x.place(x=115, y=43)
-    sw_height.place(x=140, y=45)
-    sw_btn.place(x=280, y=43)
+    label1 = Label(frame, text='Ширина:', font=10)
+    label2 = Label(frame, text='Висота:', font=10)
+    field1 = Entry(frame, width=10, font=10)
+    field2 = Entry(frame, width=10, font=10)
+    field1.insert(0, pil_image.size[0])
+    field2.insert(0, pil_image.size[1])
 
+    label1.grid(row=0, column=0, padx=3, pady=3)
+    label2.grid(row=1, column=0, padx=3, pady=3)
+    field1.grid(row=0, column=1, padx=3, pady=3)
+    field2.grid(row=1, column=1, padx=3, pady=3)
 
-# Зміна розміру зображення
-def size(width: int, height: int, new_img: Image):
-    global img
+    ok_btn = Button(popup_win, text='OK')
+    ok_btn.pack(side=BOTTOM, padx=3, pady=3)
+    frame.pack()
 
-    new_img = new_img.resize((width, height), Image.ANTIALIAS)
-    img = ImageTk.PhotoImage(new_img)
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Вікно обрізання зображення
-def crop_image():
-    new_img = get_image()
-
-    sw = Tk()
-    sw.geometry('400x110+460+300')
-    sw.wm_title('Обрізка')
-
-    sw_lbl = Label(sw, text='Введіть точки обрізання:', justify='left', font=10)
-    sw_btn = Button(sw, text='Змінити розмір', width=15,
-                    command=lambda: (crop(int(sw_ex1.get()), int(sw_ey1.get()),
-                                          int(sw_ex2.get()), int(sw_ey2.get()), new_img),
-                                     sw.destroy()))
-    sw_x1 = Label(sw, text='x1:', font=10)
-    sw_y1 = Label(sw, text='y1:', font=10)
-    sw_x2 = Label(sw, text='x2:', font=10)
-    sw_y2 = Label(sw, text='y2:', font=10)
-
-    sw_ex1 = Entry(sw, width=5, font=10)
-    sw_ey1 = Entry(sw, width=5, font=10)
-    sw_ex2 = Entry(sw, width=5, font=10)
-    sw_ey2 = Entry(sw, width=5, font=10)
-
-    sw_lbl.place(x=10, y=10)
-    sw_btn.place(x=250, y=73)
-
-    sw_x1.place(x=10, y=45)
-    sw_ex1.place(x=40, y=45)
-    sw_y1.place(x=100, y=45)
-    sw_ey1.place(x=140, y=45)
-    sw_x2.place(x=10, y=75)
-    sw_ex2.place(x=40, y=75)
-    sw_y2.place(x=100, y=75)
-    sw_ey2.place(x=140, y=75)
+    ok_btn.config(command=lambda: do_change_size(popup_win, int(field1.get()), int(field2.get())))
 
 
-# Обрізання зображення
-def crop(x1: int, y1: int, x2: int, y2: int, new_img=Image):
-    global img
+def do_change_size(popup_win: Toplevel, w: int, h: int):
+    global prev_image, pil_image
 
-    new_img = new_img.crop((x1, y1, x2, y2))
-    img = ImageTk.PhotoImage(new_img)
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Інвертоване зображення
-def invert():
-    global img
-    new_img = get_image()
-    new_img = PIL.ImageOps.invert(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
+    pil_image = prev_image
+    pil_image = pil_image.resize((w, h), Image.ANTIALIAS)
+    load_image('')
+    popup_win.destroy()
 
 
-# Чорно-біле зображення
-def grayscale():
-    global img
-    new_img = get_image()
-    new_img = PIL.ImageOps.grayscale(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
+def zoom(event):
+    global scale
+    if event.delta > 0:
+        if scale < 150:
+            scale += 10
+        else:
+            scale += 50
+    elif event.delta < 0 and scale > 15:
+        if scale < 150:
+            scale -= 10
+        else:
+            scale -= 50
+    scale_lbl.config(text=str(scale) + '%')
+    load_image('')
 
 
-# Віддзеркалення вертикально
-def flip():
-    global img
-    new_img = get_image()
-    new_img = PIL.ImageOps.flip(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
+def do_zoom():
+    popup_win = Toplevel(root)
+    popup_win.title('Масштабування')
+    frame = Frame(popup_win)
+
+    label1 = Label(frame, text='Масштаб:', font=10)
+    field1 = Entry(frame, width=20, font=10)
+
+    label1.grid(row=0, column=0, padx=3, pady=3)
+    field1.grid(row=0, column=1, padx=3, pady=3)
+    field1.insert(0, '100')
+
+    ok_btn = Button(popup_win, text='OK')
+    ok_btn.pack(side=BOTTOM, padx=3, pady=3)
+    frame.pack()
+
+    ok_btn.config(command=lambda: do_change_zoom(popup_win, int(field1.get())))
 
 
-# Віддзеркалення горизонтально
-def mirror():
-    global img
-    new_img = get_image().resize((cv_w, cv_h), Image.ANTIALIAS)
-    new_img = PIL.ImageOps.mirror(new_img)
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
+def do_change_zoom(popup_win: Toplevel, new_scale: int):
+    global scale
+    scale = new_scale
+    scale_lbl.config(text=str(scale) + '%')
+    load_image('')
+    popup_win.destroy()
 
 
-# Погіршення якості
-def lower():
-    global img
-    new_img = get_image()
-    new_img.save('./temp.jpg', quality=50)
-    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-    os.remove('./temp.jpg')
+def coords(event):
+    global x_coord, y_coord
+    x_coord, y_coord = int(canvas.canvasx(event.x)), int(canvas.canvasy(event.y))
+
+    x_crd.config(text=x_coord)
+    y_crd.config(text=y_coord)
 
 
-# Ще більше огіршення якості
-def jpeg():
-    global img
-    new_img = get_image()
-    new_img.save('./temp.jpg', quality=1)
-    img = ImageTk.PhotoImage(Image.open('./temp.jpg').resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-    os.remove('./temp.jpg')
-
-
-# Вікно змінення яскравості
-def brightness():
-    new_img = get_image()
-
-    sw = Tk()
-    sw.geometry('360x90+460+300')
-    sw.wm_title('Яскравість')
-
-    sw_scale = Scale(sw, from_=-100, to=100, length=340, orient=HORIZONTAL)
-    sw_btn = Button(sw, text='Змінити', width=10,
-                    command=lambda: (change_brightness(sw_scale.get(), new_img), sw.destroy()))
-    sw_scale.place(x=10, y=10)
-    sw_btn.place(x=145, y=60)
-
-
-# Яскравість
-def change_brightness(value: int, new_img: Image):
-    global img
-
-    value = (value + 100) / 100
-    enhancer = ImageEnhance.Brightness(new_img)
-    new_img = enhancer.enhance(value)
-
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Вікно змінення контрастності
-def contrast():
-    new_img = get_image()
-
-    sw = Tk()
-    sw.geometry('360x90+460+300')
-    sw.wm_title('Контрастність')
-
-    sw_scale = Scale(sw, from_=-100, to=100, length=340, orient=HORIZONTAL)
-    sw_btn = Button(sw, text='Змінити', width=10,
-                    command=lambda: (change_contrast(sw_scale.get(), new_img), sw.destroy()))
-    sw_scale.place(x=10, y=10)
-    sw_btn.place(x=145, y=60)
-
-
-# Контрастність
-def change_contrast(value: int, new_img: Image):
-    global img
-
-    value = (value + 100) / 100
-    enhancer = ImageEnhance.Brightness(new_img)
-    new_img = enhancer.enhance(value)
-
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Вікно змінення різкості
-def sharpness():
-    new_img = get_image()
-
-    sw = Tk()
-    sw.geometry('360x90+460+300')
-    sw.wm_title('Різкість')
-
-    sw_scale = Scale(sw, from_=-100, to=100, length=340, orient=HORIZONTAL)
-    sw_btn = Button(sw, text='Змінити', width=10,
-                    command=lambda: (change_sharpness(sw_scale.get(), new_img), sw.destroy()))
-    sw_scale.place(x=10, y=10)
-    sw_btn.place(x=145, y=60)
-
-
-# Різкість
-def change_sharpness(value: int, new_img: Image):
-    global img
-
-    value = (value + 100) / 100
-    enhancer = ImageEnhance.Sharpness(new_img)
-    new_img = enhancer.enhance(value)
-
-    img = ImageTk.PhotoImage(new_img.resize((cv_w, cv_h), Image.ANTIALIAS))
-    canvas.delete('all')
-    canvas.create_image(0, 0, anchor=NW, image=img)
-
-
-# Контекстне меню
-def do_popup(event):
-    global text_x, text_y
+def text_popup(event):
     try:
         pop_menu.tk_popup(event.x_root, event.y_root)
-        text_x, text_y = event.x, event.y
     finally:
         pop_menu.grab_release()
 
 
-# Форма додавання тексту
 def add_text():
-    sw = Tk()
-    sw.geometry('360x90+' + str(text_x) + '+' + str(text_y))
-    sw.wm_title('Текст')
+    global prev_image, pil_image
+    crd = (x_coord, y_coord)
 
-    sw_text = Entry(sw, width=35, font=10)
-    sw_text.bind('<Return>', lambda event: (text(sw_text.get(), int(sw_size.get())), sw.destroy()))
-    sw_text.place(x=10, y=10)
+    temp = prev_image
+    prev_image = pil_image
+    popup_win = Toplevel(root)
+    popup_win.protocol("WM_DELETE_WINDOW", lambda: close_default(temp, popup_win))
+    popup_win.title('Додати текст')
+    frame = Frame(popup_win)
 
-    sw_lbl = Label(sw, text='Розмір:', font=10)
-    sw_size = Entry(sw, width=5, font=10)
-    sw_size.insert(0, '10')
-    sw_lbl.place(x=10, y=48)
-    sw_size.place(x=80, y=50)
+    label1 = Label(frame, text='Текст:', font=10)
+    label2 = Label(frame, text='Розмір:', font=10)
+    field1 = Entry(frame, width=50, font=10)
+    field2 = Entry(frame, width=5, font=10)
+
+    label1.grid(row=0, column=0, padx=3, pady=3)
+    label2.grid(row=1, column=0, padx=3, pady=3)
+    field1.grid(row=0, column=1, padx=3, pady=3, columnspan=2)
+    field2.grid(row=1, column=1, padx=3, pady=3, sticky=W)
+    field2.insert(0, '14')
+
+    label_xy = Label(frame, text='X: ' + str(crd[0]) + ', Y: ' + str(crd[1]))
+    label_xy.grid(row=1, column=2, padx=3, pady=3, sticky=E)
+
+    ok_btn = Button(popup_win, text='OK')
+    ok_btn.pack(side=BOTTOM, padx=3, pady=3)
+    frame.pack()
+
+    ok_btn.config(command=lambda: do_add_text(popup_win, field1.get(), int(field2.get()), crd))
 
 
-# Додавання тексту
-def text(string: str, text_size: int):
-    global text_x, text_y
-    canvas.create_text(text_x, text_y, text=string, font='Arial ' + str(text_size), fill=brush_color)
+def do_add_text(popup_win: Toplevel, string: str, text_size: int, crd: tuple):
+    global prev_image, pil_image
+    pil_image = prev_image
+
+    draw = ImageDraw.Draw(pil_image)
+    draw.text(crd, font=ImageFont.truetype('arial.ttf', text_size * 2), fill=brush_color, text=string)
+    load_image('')
+    popup_win.destroy()
 
 
-# -------------------- Прив'язування дій миші до області малювання --------------------
+def add_image():
+    global prev_image, pil_image, start_image
+    prev_image = copy(pil_image)
+    temp = copy(start_image)
 
-canvas.bind('<Button-1>', xy)
-canvas.bind('<B1-Motion>', draw)
-canvas.bind('<Motion>', coordinates)
-canvas.bind('<MouseWheel>', do_zoom)
-canvas.bind('<ButtonPress-2>', lambda event: canvas.scan_mark(event.x, event.y))
-canvas.bind('<B2-Motion>', lambda event: canvas.scan_dragto(event.x, event.y, gain=1))
-canvas.bind('<Button-3>', do_popup)
+    new_filename = fd.askopenfilename(filetypes=FILETYPES)
+    new_image = Image.open(new_filename)
+    pil_image.paste(new_image, (x_coord, y_coord))
+    load_image('')
+    start_image = temp
 
-# -------------------- Елементи програми --------------------
 
-# Кнопки кольорів для малювання
-color_button('black', 10, 20)
-color_button('white', 40, 20)
-color_button('azure4', 10, 50)
-color_button('gray', 40, 50)
-color_button('red4', 10, 80)
-color_button('red', 40, 80)
-color_button('orange', 10, 110)
-color_button('yellow', 40, 110)
-color_button('green', 10, 140)
-color_button('light green', 40, 140)
-color_button('steelblue3', 10, 170)
-color_button('light blue', 40, 170)
-color_button('navy', 10, 200)
-color_button('blue', 40, 200)
-color_button('purple', 10, 230)
-color_button('pink', 40, 230)
+root.bind('<Control-z>', key_pressed)
+root.bind('<Control-o>', key_pressed)
+root.bind('<Control-s>', key_pressed)
+root.bind('<Control-S>', lambda e: save_image('as'))
 
-# Зміна кольору на довільний
-color_btn = Button(text='Змінити\nколір', width=7, command=lambda: color_change(None))
-color_btn.place(x=8, y=260)
+scroll_x = Scrollbar(root, orient=HORIZONTAL)
+scroll_y = Scrollbar(root, orient=VERTICAL)
+canvas = Canvas(root,  # bg='white',
+                width=canvas_width,
+                height=canvas_height,
+                xscrollcommand=scroll_x.set,
+                yscrollcommand=scroll_y.set)
+scroll_x.configure(command=canvas.xview)
+scroll_y.configure(command=canvas.yview)
 
-# Зміна розміру пензля
-size_slider = Scale(from_=1, to=50, showvalue=0, command=brush_slider, length=145)
-size_slider.place(x=10, y=340)
-size_slider.set(brush_size)
-size_field = Entry(width=8)
-size_field.bind('<Return>', brush_textfield)
-size_field.place(x=10, y=495)
-size_field.insert(0, brush_size)
+scroll_x.pack(side=BOTTOM, fill=X)
+scroll_y.pack(side=RIGHT, fill=Y)
+canvas.place(x=left_margin, y=top_margin)
 
-# Кнопки зміни пензлів
-line_btn = Button(text='/', width=2, command=lambda: change_brush('LINE'))
-line_btn.place(x=40, y=430)
-sqr_btn = Button(text='■', width=2, command=lambda: change_brush('SQUARE'))
-sqr_btn.place(x=40, y=370)
-crl_btn = Button(text='●', width=2, command=lambda: change_brush('CIRCLE'))
-crl_btn.place(x=40, y=400)
-enh_btn = Button(text='🖌', width=2, command=lambda: change_brush('ENHANCED'))
-enh_btn.place(x=40, y=340)
-sml_btn = Button(text='=)', width=2, command=lambda: change_brush('SMILE'))
-sml_btn.place(x=40, y=460)
-enh_btn.config(background='light gray')
+canvas.bind('<MouseWheel>', zoom)
+canvas.bind('<Button-3>', text_popup)
+load_image('default')
 
-# Кнопка очищення полотна
-clear_btn = Button(text='Очистити', width=7, command=lambda: canvas.delete('all'))
-clear_btn.place(x=8, y=550)
+main_frame = LabelFrame(root, text='Функції')
 
-# Координати на полотні
-x_lbl = Label(text='X:')
-y_lbl = Label(text='Y:')
-x_crd = Label(text='0')
-y_crd = Label(text='0')
-x_lbl.place(x=5, y=700)
-y_lbl.place(x=5, y=720)
-x_crd.place(x=25, y=700)
-y_crd.place(x=25, y=720)
+crop_btn = Button(main_frame, text='✂', font='Arial 20', width=3, relief='ridge', command=crop)
+size_btn = Button(main_frame, text='🗚', font='Arial 20', width=3, relief='ridge', command=change_size)
+draw_btn = Button(main_frame, text='✎', font='Arial 20', width=3, relief='ridge', command=lambda: draw_(None))
+zoom_btn = Button(main_frame, text='🔍', font='Arial 20', width=3, relief='ridge', command=do_zoom)
+crop_btn.grid(row=0, column=0, padx=3, pady=3)
+size_btn.grid(row=0, column=1, padx=3, pady=3)
+draw_btn.grid(row=1, column=0, padx=3, pady=3)
+zoom_btn.grid(row=1, column=1, padx=3, pady=3)
+main_frame.place(x=10, y=10)
 
-# -------------------- Налаштування меню --------------------
+coord_frame = LabelFrame(root, text='Координати')
+x_lbl = Label(coord_frame, text='X: ')
+y_lbl = Label(coord_frame, text='Y: ')
+x_crd = Label(coord_frame, text='0')
+y_crd = Label(coord_frame, text='0')
+x_lbl.grid(row=0, column=0, padx=1, pady=1)
+y_lbl.grid(row=1, column=0, padx=1, pady=1)
+x_crd.grid(row=0, column=1, padx=1, pady=1, sticky=W)
+y_crd.grid(row=1, column=1, padx=1, pady=1, sticky=W)
+coord_frame.place(x=10, y=610)
+canvas.bind('<Motion>', coords)
+
+scale_frame = LabelFrame(text='М-таб')
+scale_lbl = Label(scale_frame, text='100%')
+scale_lbl.pack()
+scale_frame.place(x=98, y=635)
+
+root.bind("<Configure>", resize)
+root.update_idletasks()
+root.minsize(root.winfo_width(), root.winfo_height())
 
 menu = Menu()
 
 file_menu = Menu(tearoff=0)
-file_menu.add_command(label='Вставити зображення', command=paste_image)
-file_menu.add_command(label='Зберегти зображення', command=save_image)
+file_menu.add_command(label='Відкрити зображення',
+                      command=lambda: load_image('new'),
+                      accelerator='Ctrl+O')
+file_menu.add_command(label='Зберегти зображення',
+                      command=lambda: save_image(''),
+                      accelerator='Ctrl+S')
+file_menu.add_command(label='Зберегти зображення як...',
+                      command=lambda: save_image('as'),
+                      accelerator='Ctrl+Shift+S')
+file_menu.add_separator()
+file_menu.add_command(label='Закрити програму',
+                      command=lambda: root.destroy(),
+                      accelerator='Ctrl+Q')
 
-edit_menu = Menu(tearoff=0)
-edit_menu.add_command(label='Збільшити/зменшити', command=change_scale)
-edit_menu.add_command(label='Змінити розмір', command=change_size)
-edit_menu.add_command(label='Обрізати зображення', command=crop_image)
-edit_menu.add_separator()
-edit_menu.add_command(label='Інвертувати кольори', command=invert)
-edit_menu.add_command(label='Зробити чорно-білим', command=grayscale)
-edit_menu.add_separator()
-edit_menu.add_command(label='Віддзеркалити вертикально', command=flip)
-edit_menu.add_command(label='Віддзеркалити горизонтально', command=mirror)
-edit_menu.add_separator()
-edit_menu.add_command(label='Погіршити якість', command=lower)
-edit_menu.add_command(label='Знищити зображення', command=jpeg)
-edit_menu.add_separator()
-edit_menu.add_command(label='Яскравість', command=brightness)
-edit_menu.add_command(label='Контрастність', command=contrast)
-edit_menu.add_command(label='Різкість', command=sharpness)
+cor_menu = Menu(tearoff=0)
+cor_menu.add_command(label='Яскравість', command=brightness)
+cor_menu.add_command(label='Контрастність', command=contrast)
+cor_menu.add_command(label='Різкість', command=sharpness)
+cor_menu.add_separator()
+cor_menu.add_command(label='Гістограма', command=histogram)
+cor_menu.add_separator()
+cor_menu.add_command(label='Повернути на 90°', command=rotate)
+cor_menu.add_command(label='Віддзеркалити', command=mirror)
+cor_menu.add_command(label='Перевернути', command=flip)
+
+options_menu = Menu(tearoff=0)
+options_menu.add_command(label='Відмінити дію',
+                         command=lambda: load_image('prev'),
+                         accelerator='Ctrl+Z')
+options_menu.add_command(label='Скинути зображення', command=lambda: load_image('start'))
+
+ef_menu = Menu(tearoff=0)
+ef_menu.add_command(label='Інвертувати кольори', command=invert)
+ef_menu.add_command(label='Зробити чорно-білим', command=grayscale)
+ef_menu.add_command(label='Постеризація', command=posterize)
+ef_menu.add_command(label='Соларизація', command=solarize)
+ef_menu.add_command(label='Вицвітання (?)', command=washout)
+ef_menu.add_separator()
+ef_menu.add_command(label='Розмиття по Гаусу', command=blur)
 
 menu.add_cascade(label='Файл', menu=file_menu)
-menu.add_cascade(label='Редагувати', menu=edit_menu)
+menu.add_cascade(label='Опції', menu=options_menu)
+menu.add_cascade(label='Корекція', menu=cor_menu)
+menu.add_cascade(label='Ефекти', menu=ef_menu)
 root.config(menu=menu)
 
 pop_menu = Menu(tearoff=0)
 pop_menu.add_command(label='Додати текст', command=add_text)
-
-# -------------------- Запуск програми --------------------
+pop_menu.add_command(label='Вставити зображення', command=add_image)
 
 root.mainloop()
